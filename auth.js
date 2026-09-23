@@ -18,7 +18,7 @@ const ACCOUNTS = [
   { name: "Amor", role: "admin", hash: "08c5e96a9f22ba68a3e11cdf463d1c9b175da3f94a792e25a51920487d1fbe9d" },
 ];
 
-const SESSION_KEY = "suankularb.session";
+const SESSION_KEY = "lrchat.session";
 
 async function sha256(text) {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));

@@ -6,6 +6,11 @@
     <title>Love Roulette — คลังดอกกุหลาบ</title>
     <!-- รายชื่อผู้ใช้ + ตรวจรหัส PIN (hash) -->
     <script src="auth.js"></script>
+    <!-- แชท: Firebase (ใช้เมื่อกรอก firebase-config.js แล้ว) + ตัวจัดการข้อความ -->
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+    <script src="firebase-config.js"></script>
+    <script src="chat.js"></script>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Google Fonts -->
@@ -147,6 +152,7 @@
                             ]">
                         <i :class="tab.icon"></i>
                         <span>{{ tab.name }}</span>
+                        <span v-if="tab.badge" class="bg-rosepink-600 text-white text-[10px] font-bold min-w-[18px] h-[18px] px-1 rounded-full flex items-center justify-center">{{ tab.badge }}</span>
                     </button>
                 </nav>
             </div>
@@ -429,7 +435,7 @@
             </section>
 
             <!-- GUEST / HOME VIEW: Inventory Summary & List displayed immediately when not logged in -->
-            <section v-if="!isAdmin" class="w-full">
+            <section v-if="!isAdmin && currentTab !== 'chat'" class="w-full">
                 <div class="bg-gradient-to-r from-rosepink-100/90 via-cream-100 to-amber-50 p-4 sm:p-8 rounded-3xl border border-rosepink-200 soft-card-shadow relative overflow-hidden">
                     <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
                         <div>
@@ -580,6 +586,88 @@
                                 ยังไม่มีประวัติการปรับนับรายการใน Inventory ของคุณ
                             </div>
                         </div>
+                    </div>
+                </div>
+            </section>
+            <!-- CHAT TAB (Member + Admin): ห้องรวม + แชทส่วนตัว -->
+            <section v-if="currentIdentity && currentTab === 'chat'" class="space-y-3">
+                <div v-if="chatMode === 'local'" class="bg-amber-50 border border-amber-200 text-amber-700 rounded-2xl px-4 py-2.5 text-xs flex items-start gap-2">
+                    <i class="fa-solid fa-flask mt-0.5"></i>
+                    <span><b>โหมดทดลอง:</b> ข้อความเก็บในเบราว์เซอร์นี้เท่านั้น ลองคุยได้โดยเปิดหลายแท็บแล้วเลือกคนละตัวตน ยังคุยข้ามเครื่องไม่ได้จนกว่าจะตั้งค่า Firebase</span>
+                </div>
+                <div v-if="chatError" class="bg-rosepink-50 border border-rosepink-200 text-rosepink-700 rounded-2xl px-4 py-2.5 text-xs">
+                    <i class="fa-solid fa-triangle-exclamation mr-1"></i> {{ chatError }}
+                </div>
+
+                <div class="bg-white rounded-3xl border border-cream-200 soft-card-shadow overflow-hidden grid md:grid-cols-[280px_1fr] h-[calc(100vh-15rem)] min-h-[420px]">
+                    <!-- Room list (มือถือ: ซ่อนเมื่อเปิดห้องอยู่) -->
+                    <aside class="border-r border-cream-200 flex-col min-h-0" :class="chatShowConversation ? 'hidden md:flex' : 'flex'">
+                        <div class="px-4 py-3 border-b border-cream-200 text-xs font-bold text-gray-500 uppercase tracking-wider">ห้องแชท</div>
+                        <div class="overflow-y-auto flex-1">
+                            <button v-for="room in chatRoomList" :key="room.id" @click="openChatRoom(room.id)"
+                                    class="w-full flex items-center gap-3 px-4 py-3 text-left border-b border-cream-100 transition"
+                                    :class="chatActiveRoom === room.id ? 'bg-rosepink-50' : 'hover:bg-cream-50'">
+                                <span class="w-10 h-10 shrink-0 rounded-xl flex items-center justify-center text-xl border"
+                                      :class="room.id === 'global' ? 'bg-rosepink-100 border-rosepink-200' : 'bg-cream-100 border-cream-200'">{{ room.avatar }}</span>
+                                <span class="flex-1 min-w-0">
+                                    <span class="flex items-center justify-between gap-2">
+                                        <span class="font-bold text-sm text-gray-800 truncate">{{ room.name }}</span>
+                                        <span v-if="room.last" class="text-[10px] text-gray-400 shrink-0">{{ formatChatTime(room.last.ts) }}</span>
+                                    </span>
+                                    <span class="flex items-center justify-between gap-2">
+                                        <span class="text-xs text-gray-500 truncate">{{ room.last ? room.lastPreview : room.subtitle }}</span>
+                                        <span v-if="room.unread" class="bg-rosepink-600 text-white text-[10px] font-bold min-w-[18px] h-[18px] px-1 rounded-full flex items-center justify-center shrink-0">{{ room.unread }}</span>
+                                    </span>
+                                </span>
+                            </button>
+                        </div>
+                    </aside>
+
+                    <!-- Conversation -->
+                    <div class="flex-col min-h-0" :class="chatShowConversation ? 'flex' : 'hidden md:flex'">
+                        <div class="px-4 py-3 border-b border-cream-200 flex items-center gap-3">
+                            <button @click="chatShowConversation = false" class="md:hidden w-8 h-8 rounded-lg bg-cream-100 text-gray-600 flex items-center justify-center" title="กลับรายการห้อง">
+                                <i class="fa-solid fa-arrow-left text-xs"></i>
+                            </button>
+                            <span class="text-xl">{{ chatActiveRoomInfo.avatar }}</span>
+                            <div class="min-w-0">
+                                <div class="font-bold text-sm text-gray-800 truncate">{{ chatActiveRoomInfo.name }}</div>
+                                <div class="text-[11px] text-gray-400 truncate">{{ chatActiveRoomInfo.subtitle }}</div>
+                            </div>
+                        </div>
+
+                        <div ref="chatScroll" class="flex-1 overflow-y-auto px-4 py-4 space-y-3 bg-cream-50/60">
+                            <div v-if="chatActiveMessages.length === 0" class="h-full flex items-center justify-center text-xs text-gray-400 text-center">
+                                ยังไม่มีข้อความ เริ่มพิมพ์ทักทายได้เลย 💬
+                            </div>
+                            <div v-for="msg in chatActiveMessages" :key="msg.id" class="flex items-end gap-2" :class="msg.senderId === currentIdentity.id ? 'justify-end' : 'justify-start'">
+                                <span v-if="msg.senderId !== currentIdentity.id" class="w-8 h-8 shrink-0 rounded-lg bg-white border border-cream-200 flex items-center justify-center text-base">{{ getIdentityAvatar(msg.senderId) }}</span>
+                                <div class="max-w-[78%] sm:max-w-[65%] group">
+                                    <div v-if="msg.senderId !== currentIdentity.id" class="text-[11px] text-gray-500 mb-0.5 ml-1 flex items-center gap-1">
+                                        {{ getIdentityName(msg.senderId) }}
+                                        <span v-if="isIdentityAdmin(msg.senderId)" class="text-[9px] font-bold text-rosepink-600 bg-rosepink-50 border border-rosepink-200 px-1.5 rounded-full">👑 Admin</span>
+                                    </div>
+                                    <div class="px-3.5 py-2 rounded-2xl text-sm whitespace-pre-wrap break-words"
+                                         :class="msg.senderId === currentIdentity.id ? 'bg-rosepink-500 text-white rounded-br-md' : 'bg-white border border-cream-200 text-gray-800 rounded-bl-md'">{{ msg.text }}</div>
+                                    <div class="flex items-center gap-2 mt-0.5 text-[10px] text-gray-400" :class="msg.senderId === currentIdentity.id ? 'justify-end mr-1' : 'ml-1'">
+                                        <span>{{ formatChatTime(msg.ts) }}</span>
+                                        <button v-if="canDeleteChat(msg)" @click="deleteChatMessage(msg)" class="text-gray-400 hover:text-rosepink-600" title="ลบข้อความ">
+                                            <i class="fa-solid fa-trash-can"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <form @submit.prevent="sendChatMessage" class="p-3 border-t border-cream-200 flex items-end gap-2 bg-white">
+                            <textarea v-model="chatInput" @keydown.enter.exact.prevent="sendChatMessage" rows="1" :maxlength="chatMaxLength"
+                                      placeholder="พิมพ์ข้อความ..." title="Enter ส่ง, Shift+Enter ขึ้นบรรทัดใหม่"
+                                      class="flex-1 min-w-0 resize-none max-h-32 px-3.5 py-2.5 bg-cream-50 border border-cream-300 rounded-2xl text-sm focus:outline-none focus:border-rosepink-400"></textarea>
+                            <button type="submit" :disabled="!chatInput.trim() || chatSending"
+                                    class="shrink-0 w-11 h-11 rounded-2xl bg-rosepink-500 hover:bg-rosepink-600 text-white flex items-center justify-center shadow-md disabled:opacity-40 transition active:scale-95" title="ส่ง">
+                                <i class="fa-solid fa-paper-plane"></i>
+                            </button>
+                        </form>
                     </div>
                 </div>
             </section>
@@ -907,7 +995,7 @@
                     { label: 'ELU Coin 10 เหรียญ', icon: '🪙', description: 'รับ ELU Coin 10 เหรียญ' }
                 ];
 
-                const roulettePrizes = ref(JSON.parse(localStorage.getItem('rose_vault_prizes')) || defaultPrizes);
+                const roulettePrizes = ref(JSON.parse(localStorage.getItem('lrchat_vault_prizes')) || defaultPrizes);
 
                 const newPrizeIcon = ref('🌹');
                 const newPrizeLabel = ref('');
@@ -935,7 +1023,7 @@
                 // บันทึกอัตโนมัติทุกครั้งที่แก้ไข (ไม่ต้องกดปุ่มบันทึก)
                 const saveRoulettePrizes = () => {
                     roulettePrizes.value.forEach(p => { p.description = 'รับ ' + (p.label || ''); });
-                    localStorage.setItem('rose_vault_prizes', JSON.stringify(roulettePrizes.value));
+                    localStorage.setItem('lrchat_vault_prizes', JSON.stringify(roulettePrizes.value));
                     nextTick(() => { drawWheel(0); });
                 };
 
@@ -1075,7 +1163,7 @@
 
                 const visitorIdentities = computed(() => identities.filter(i => i.role === 'visitor'));
 
-                const selectedVisitorIdForAdmin = ref(localStorage.getItem('rose_vault_selected_admin_visitor') || (visitorIdentities.value[0]?.id || 'faye'));
+                const selectedVisitorIdForAdmin = ref(localStorage.getItem('lrchat_vault_selected_admin_visitor') || (visitorIdentities.value[0]?.id || 'faye'));
                 const selectedVisitorForAdmin = computed(() => {
                     return identities.find(i => i.id === selectedVisitorIdForAdmin.value) || visitorIdentities.value[0] || null;
                 });
@@ -1101,16 +1189,22 @@
                 const adminDeleteCustomValue = (itemId) => adminApplyCustomValue(itemId, -1);
 
                 const displayTabs = computed(() => {
+                    // แท็บแชทแสดงเมื่อเลือกตัวตนแล้ว (ทั้ง Member และ Admin)
+                    const chatTab = currentIdentity.value
+                        ? [{ id: 'chat', name: 'แชท 💬', icon: 'fa-solid fa-comments text-rosepink-400', badge: chatTotalUnread.value }]
+                        : [];
                     if (isAdmin.value) {
                         return [
                             { id: 'admin_visitors', name: 'รายชื่อ Members 👥', icon: 'fa-solid fa-users text-rosepink-400' },
                             { id: 'admin_visitor_inventory', name: selectedVisitorForAdmin.value ? `คลังของ ${selectedVisitorForAdmin.value.name} 🎒` : 'คลัง Member 🎒', icon: 'fa-solid fa-bag-shopping text-rosepink-400' },
-                            { id: 'admin_logs', name: 'ประวัติ Logs ทั้งหมด 📝', icon: 'fa-solid fa-history' }
+                            { id: 'admin_logs', name: 'ประวัติ Logs ทั้งหมด 📝', icon: 'fa-solid fa-history' },
+                            ...chatTab
                         ];
                     }
                     return [
                         { id: 'inventory', name: 'Inventory ของฉัน 🎒', icon: 'fa-solid fa-bag-shopping text-rosepink-400' },
-                        { id: 'logs', name: 'ประวัติบันทึก 📝', icon: 'fa-solid fa-history' }
+                        { id: 'logs', name: 'ประวัติบันทึก 📝', icon: 'fa-solid fa-history' },
+                        ...chatTab
                     ];
                 });
 
@@ -1120,17 +1214,17 @@
 
                 const viewVisitorInventory = (visitor) => {
                     selectedVisitorIdForAdmin.value = visitor.id;
-                    localStorage.setItem('rose_vault_selected_admin_visitor', visitor.id);
+                    localStorage.setItem('lrchat_vault_selected_admin_visitor', visitor.id);
                     currentTab.value = 'admin_visitor_inventory';
                     window.scrollTo({ top: 0, behavior: 'smooth' });
                 };
 
                 const onAdminVisitorChange = () => {
-                    localStorage.setItem('rose_vault_selected_admin_visitor', selectedVisitorIdForAdmin.value);
+                    localStorage.setItem('lrchat_vault_selected_admin_visitor', selectedVisitorIdForAdmin.value);
                 };
 
                 const loadAllUserInventories = () => {
-                    const saved = JSON.parse(localStorage.getItem('rose_vault_user_inventories')) || {};
+                    const saved = JSON.parse(localStorage.getItem('lrchat_vault_user_inventories')) || {};
                     const map = {};
                     identities.forEach(user => {
                         if (saved[user.id]) {
@@ -1158,7 +1252,7 @@
                     return c ? c.count : 0;
                 };
 
-                const userReceivedRosesMap = ref(JSON.parse(localStorage.getItem('rose_vault_user_received_map')) || {});
+                const userReceivedRosesMap = ref(JSON.parse(localStorage.getItem('lrchat_vault_user_received_map')) || {});
                 const getVisitorReceivedRoseCount = (visitorId) => {
                     if (!visitorId) return 0;
                     return userReceivedRosesMap.value[visitorId] || 0;
@@ -1238,7 +1332,7 @@
                     }
                 });
 
-                const inventoryLogs = ref(JSON.parse(localStorage.getItem('rose_vault_logs')) || []);
+                const inventoryLogs = ref(JSON.parse(localStorage.getItem('lrchat_vault_logs')) || []);
                 let logSeq = 0;
                 // ทุก log ผูกกับเจ้าของคลัง (userId) เพื่อให้ Member เห็นเฉพาะประวัติของตัวเอง
                 // note = ข้อความที่ Member เห็น, adminNote = ข้อความเต็มสำหรับ Admin (เช่น ชื่อผู้มอบ)
@@ -1257,9 +1351,9 @@
                     : inventoryLogs.value.filter(l => l.userId === adminLogsFilter.value));
 
                 // Admin Push Notifications (สร้างเมื่อมีการมอบดอกกุหลาบ)
-                const adminNotifications = ref(JSON.parse(localStorage.getItem('rose_vault_admin_notifications')) || []);
+                const adminNotifications = ref(JSON.parse(localStorage.getItem('lrchat_vault_admin_notifications')) || []);
                 const unreadAdminNotificationsCount = computed(() => adminNotifications.value.filter(n => !n.read).length);
-                watch(adminNotifications, (val) => localStorage.setItem('rose_vault_admin_notifications', JSON.stringify(val)), { deep: true });
+                watch(adminNotifications, (val) => localStorage.setItem('lrchat_vault_admin_notifications', JSON.stringify(val)), { deep: true });
                 const markAllNotificationsAsRead = () => { adminNotifications.value.forEach(n => { n.read = true; }); };
                 const deleteNotification = (id) => { adminNotifications.value = adminNotifications.value.filter(n => n.id !== id); };
 
@@ -1278,9 +1372,9 @@
                     return coin ? coin.count : 0;
                 });
 
-                watch(userInventoriesMap, (val) => localStorage.setItem('rose_vault_user_inventories', JSON.stringify(val)), { deep: true });
-                watch(inventoryLogs, (val) => localStorage.setItem('rose_vault_logs', JSON.stringify(val)), { deep: true });
-                watch(userReceivedRosesMap, (val) => localStorage.setItem('rose_vault_user_received_map', JSON.stringify(val)), { deep: true });
+                watch(userInventoriesMap, (val) => localStorage.setItem('lrchat_vault_user_inventories', JSON.stringify(val)), { deep: true });
+                watch(inventoryLogs, (val) => localStorage.setItem('lrchat_vault_logs', JSON.stringify(val)), { deep: true });
+                watch(userReceivedRosesMap, (val) => localStorage.setItem('lrchat_vault_user_received_map', JSON.stringify(val)), { deep: true });
 
                 const modals = ref({
                     adminAuth: false,
@@ -1522,7 +1616,160 @@
                     return type;
                 };
 
+                // ===== แชท: ห้องรวม ("global") + แชทส่วนตัว ("dm_<a>_<b>") =====
+                const chatBackend = createChatBackend();
+                const chatMode = chatBackend.mode;
+                const chatMaxLength = CHAT_MAX_LENGTH;
+                const chatMessages = ref([]);
+                const chatError = ref('');
+                const chatInput = ref('');
+                const chatSending = ref(false);
+                const chatActiveRoom = ref('global');
+                const chatShowConversation = ref(false); // มือถือ: false = รายการห้อง, true = หน้าคุย
+                const chatScroll = ref(null);
+                let chatUnsubscribe = null;
+
+                const getIdentityAvatar = (id) => (identities.find(i => i.id === id) || {}).avatar || '👤';
+                const isIdentityAdmin = (id) => (identities.find(i => i.id === id) || {}).role === 'admin';
+
+                // ห้องที่ผู้ใช้คนนี้เข้าได้ = ห้องรวม + แชทส่วนตัวกับทุกคน (รวม 16 ห้อง)
+                const chatRoomIds = computed(() => {
+                    const me = currentIdentity.value;
+                    if (!me) return [];
+                    return ['global', ...identities.filter(i => i.id !== me.id).map(i => dmRoomId(me.id, i.id))];
+                });
+
+                watch(() => currentIdentity.value && currentIdentity.value.id, () => {
+                    if (chatUnsubscribe) { chatUnsubscribe(); chatUnsubscribe = null; }
+                    chatMessages.value = [];
+                    chatError.value = '';
+                    chatActiveRoom.value = 'global';
+                    chatShowConversation.value = false;
+                    if (!currentIdentity.value) return;
+                    chatUnsubscribe = chatBackend.subscribe(chatRoomIds.value,
+                        (list) => { chatMessages.value = list.slice().sort((a, b) => a.ts - b.ts); },
+                        (err) => { chatError.value = 'เชื่อมต่อแชทไม่ได้: ' + (err && err.message ? err.message : err); });
+                }, { immediate: true });
+
+                // เวลาอ่านล่าสุดของแต่ละห้อง (เก็บต่อผู้ใช้ในเบราว์เซอร์นี้) → ใช้นับข้อความที่ยังไม่อ่าน
+                const chatLastRead = ref({});
+                const lastReadKey = () => 'lrchat_lastread_' + (currentIdentity.value ? currentIdentity.value.id : '');
+                watch(() => currentIdentity.value && currentIdentity.value.id, () => {
+                    try { chatLastRead.value = JSON.parse(localStorage.getItem(lastReadKey())) || {}; } catch { chatLastRead.value = {}; }
+                }, { immediate: true });
+                const markRoomRead = (roomId) => {
+                    const msgs = chatMessages.value.filter(m => m.room === roomId);
+                    const latest = msgs.length ? msgs[msgs.length - 1].ts : 0;
+                    if ((chatLastRead.value[roomId] || 0) >= latest) return;
+                    chatLastRead.value = { ...chatLastRead.value, [roomId]: latest };
+                    try { localStorage.setItem(lastReadKey(), JSON.stringify(chatLastRead.value)); } catch {}
+                };
+                const unreadIn = (roomId) => {
+                    const me = currentIdentity.value;
+                    if (!me) return 0;
+                    const since = chatLastRead.value[roomId] || 0;
+                    return chatMessages.value.filter(m => m.room === roomId && m.senderId !== me.id && m.ts > since).length;
+                };
+
+                const roomInfo = (roomId) => {
+                    if (roomId === 'global') return { id: 'global', name: 'ห้องรวม', avatar: '💬', subtitle: `ทุกคน (${identities.length} คน)` };
+                    const me = currentIdentity.value;
+                    const otherId = roomId.replace(/^dm_/, '').split('_').find(id => !me || id !== me.id);
+                    const other = identities.find(i => i.id === otherId) || { name: otherId, avatar: '👤', role: 'visitor' };
+                    return { id: roomId, name: other.name, avatar: other.avatar, subtitle: 'แชทส่วนตัว · ' + (other.role === 'admin' ? 'Admin' : 'Member') };
+                };
+
+                const chatRoomList = computed(() => chatRoomIds.value.map(id => {
+                    const msgs = chatMessages.value.filter(m => m.room === id);
+                    const last = msgs[msgs.length - 1] || null;
+                    const me = currentIdentity.value;
+                    return {
+                        ...roomInfo(id),
+                        last,
+                        lastPreview: last ? (last.senderId === (me && me.id) ? 'คุณ: ' : getIdentityName(last.senderId) + ': ') + last.text : '',
+                        unread: unreadIn(id)
+                    };
+                }).sort((a, b) => {
+                    // ห้องรวมอยู่บนสุด ที่เหลือเรียงตามข้อความล่าสุด
+                    if (a.id === 'global') return -1;
+                    if (b.id === 'global') return 1;
+                    return (b.last ? b.last.ts : 0) - (a.last ? a.last.ts : 0);
+                }));
+
+                const chatActiveRoomInfo = computed(() => roomInfo(chatActiveRoom.value));
+                const chatActiveMessages = computed(() => chatMessages.value.filter(m => m.room === chatActiveRoom.value));
+                const chatTotalUnread = computed(() => chatRoomIds.value.reduce((sum, id) => sum + unreadIn(id), 0));
+
+                const scrollChatToBottom = () => nextTick(() => { if (chatScroll.value) chatScroll.value.scrollTop = chatScroll.value.scrollHeight; });
+
+                // เปิดดูห้องอยู่ → ถือว่าอ่านแล้ว และเลื่อนลงข้อความล่าสุด
+                watch([chatActiveMessages, currentTab, chatShowConversation], () => {
+                    if (currentTab.value !== 'chat') return;
+                    const isDesktop = window.matchMedia('(min-width: 768px)').matches;
+                    if (isDesktop || chatShowConversation.value) markRoomRead(chatActiveRoom.value);
+                    scrollChatToBottom();
+                });
+
+                const openChatRoom = (roomId) => {
+                    chatActiveRoom.value = roomId;
+                    chatShowConversation.value = true;
+                    markRoomRead(roomId);
+                    scrollChatToBottom();
+                };
+
+                const sendChatMessage = async () => {
+                    const text = chatInput.value.trim();
+                    if (!text || chatSending.value || !currentIdentity.value) return;
+                    if (text.length > CHAT_MAX_LENGTH) { triggerToast(`ข้อความยาวเกิน ${CHAT_MAX_LENGTH} ตัวอักษร`); return; }
+                    chatSending.value = true;
+                    try {
+                        await chatBackend.send(chatActiveRoom.value, currentIdentity.value.id, text);
+                        chatInput.value = '';
+                    } catch (err) {
+                        triggerToast('ส่งข้อความไม่สำเร็จ: ' + (err && err.message ? err.message : err));
+                    } finally {
+                        chatSending.value = false;
+                    }
+                };
+
+                // ลบได้: ข้อความของตัวเอง หรือ Admin ลบข้อความในห้องรวม
+                const canDeleteChat = (msg) => !!currentIdentity.value &&
+                    (msg.senderId === currentIdentity.value.id || (isAdmin.value && msg.room === 'global'));
+                const deleteChatMessage = async (msg) => {
+                    if (!canDeleteChat(msg)) return;
+                    if (!window.confirm('ลบข้อความนี้?')) return;
+                    try { await chatBackend.remove(msg.id); }
+                    catch (err) { triggerToast('ลบไม่สำเร็จ: ' + (err && err.message ? err.message : err)); }
+                };
+
+                const formatChatTime = (ts) => {
+                    const d = new Date(ts);
+                    const today = new Date();
+                    const sameDay = d.toDateString() === today.toDateString();
+                    return sameDay
+                        ? d.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })
+                        : d.toLocaleDateString('th-TH', { day: 'numeric', month: 'short' }) + ' ' + d.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+                };
+
                 return {
+                    chatMode,
+                    chatMaxLength,
+                    chatError,
+                    chatInput,
+                    chatSending,
+                    chatActiveRoom,
+                    chatShowConversation,
+                    chatScroll,
+                    chatRoomList,
+                    chatActiveRoomInfo,
+                    chatActiveMessages,
+                    openChatRoom,
+                    sendChatMessage,
+                    canDeleteChat,
+                    deleteChatMessage,
+                    formatChatTime,
+                    getIdentityAvatar,
+                    isIdentityAdmin,
                     isAdmin,
                     currentTab,
                     displayTabs,

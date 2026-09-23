@@ -1,0 +1,27 @@
+rules_version = '2';
+// กฎพื้นฐานสำหรับตัวลอง LR-chat (ยังไม่มีระบบ login ของ Firebase)
+// - อ่าน/เพิ่ม/ลบได้เฉพาะ collection "messages"
+// - ข้อความต้องมีรูปแบบถูกต้อง: room, senderId, text (1-500 ตัวอักษร), ts
+// - แก้ไขข้อความไม่ได้
+// ข้อจำกัด: ใครมีค่า config ก็อ่าน/ส่งข้อความในนามคนอื่นได้ รวมถึงอ่านแชทส่วนตัว
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /messages/{id} {
+      allow read: if true;
+      allow create: if request.resource.data.keys().hasOnly(['room', 'senderId', 'text', 'ts'])
+                    && request.resource.data.room is string
+                    && (request.resource.data.room == 'global' || request.resource.data.room.matches('dm_[a-z]+_[a-z]+'))
+                    && request.resource.data.senderId is string
+                    && request.resource.data.senderId.matches('[a-z]+')
+                    && request.resource.data.text is string
+                    && request.resource.data.text.size() > 0
+                    && request.resource.data.text.size() <= 500
+                    && request.resource.data.ts is number;
+      allow delete: if true;
+      allow update: if false;
+    }
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
